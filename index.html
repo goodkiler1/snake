@@ -2,7 +2,11 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#12151c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Змейка</title>
 <style>
   :root {
@@ -22,9 +26,11 @@
   html, body {
     margin: 0;
     height: 100%;
+    overscroll-behavior: none;   /* без «оттягивания» страницы при свайпе */
   }
 
   body {
+    min-height: 100dvh;
     background: var(--bg);
     color: var(--text);
     font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -32,10 +38,11 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 16px;
-    padding: 16px;
+    gap: 14px;
+    padding: 12px max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-bottom));
     user-select: none;
     -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
   }
 
@@ -78,8 +85,7 @@
 
   .stage {
     position: relative;
-    width: 100%;
-    max-width: 420px;
+    width: min(100%, 420px);
     aspect-ratio: 1;
   }
 
@@ -87,6 +93,7 @@
     width: 100%;
     height: 100%;
     display: block;
+    touch-action: none;   /* свайп по полю не листает страницу */
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 12px;
@@ -143,6 +150,63 @@
     line-height: 1.6;
   }
 
+  /* Экранные кнопки — только для сенсорных экранов */
+  .dpad { display: none; }
+
+  .dpad button {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    font-size: 26px;
+    line-height: 1;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+  }
+
+  .dpad button:active {
+    background: var(--border);
+    transform: scale(0.94);
+  }
+
+  .dpad button:hover { background: var(--panel); }
+
+  .dpad .up    { grid-area: up; }
+  .dpad .down  { grid-area: down; }
+  .dpad .left  { grid-area: left; }
+  .dpad .right { grid-area: right; }
+
+  .dpad .pause {
+    grid-area: pause;
+    font-size: 17px;
+  }
+
+  @media (pointer: coarse) {
+    .hint { display: none; }
+
+    .stage { width: min(100%, 420px, 46dvh); }
+
+    .dpad {
+      display: grid;
+      grid-template-areas:
+        ".    up   pause"
+        "left down right";
+      grid-template-columns: repeat(3, 72px);
+      grid-auto-rows: 62px;
+      gap: 9px;
+    }
+  }
+
+  /* Телефон лёжа: поле поменьше, кнопки сбоку */
+  @media (pointer: coarse) and (orientation: landscape) {
+    body { flex-direction: row; flex-wrap: wrap; gap: 12px; }
+    h1, .scores { display: none; }
+    .stage { width: min(88dvh, 420px); }
+    .dpad { grid-template-columns: repeat(3, 62px); grid-auto-rows: 54px; }
+  }
+
   kbd {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -177,6 +241,14 @@
     </div>
     <button id="action">Играть</button>
   </div>
+</div>
+
+<div class="dpad" id="dpad">
+  <button class="up"    data-dir="0,-1" aria-label="Вверх">↑</button>
+  <button class="pause" data-pause     aria-label="Пауза">⏸</button>
+  <button class="left"  data-dir="-1,0" aria-label="Влево">←</button>
+  <button class="down"  data-dir="0,1"  aria-label="Вниз">↓</button>
+  <button class="right" data-dir="1,0"  aria-label="Вправо">→</button>
 </div>
 
 <p class="hint">
@@ -421,7 +493,11 @@ document.addEventListener('keydown', e => {
   const turn = KEYS[e.key] || KEYS[e.key.toLowerCase()];
   if (!turn) return;
   e.preventDefault();
+  queueTurn(turn);
+});
 
+// Поворот из любого источника: клавиши, свайп, экранные кнопки.
+function queueTurn(turn) {
   if (state === 'ready' || state === 'over') { start(); return; }
   if (state !== 'playing') return;
 
@@ -429,6 +505,40 @@ document.addEventListener('keydown', e => {
   if (turn.x === -last.x && turn.y === -last.y) return;  // разворот на 180° запрещён
   if (turn.x === last.x && turn.y === last.y) return;    // то же направление — не копим
   if (pending.length < 2) pending.push(turn);
+}
+
+// Экранные кнопки
+function pressButton(target) {
+  const btn = target.closest && target.closest('button');
+  if (!btn) return;
+
+  if (navigator.vibrate) navigator.vibrate(8);
+
+  if (btn.hasAttribute('data-pause')) {
+    if (state === 'playing') pause();
+    else if (state === 'paused') resume();
+    else start();
+    return;
+  }
+
+  const [x, y] = btn.dataset.dir.split(',').map(Number);
+  queueTurn({ x, y });
+}
+
+const dpad = document.getElementById('dpad');
+let lastPress = 0;
+
+// pointerdown, а не click — палец должен срабатывать сразу, без задержки.
+dpad.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  lastPress = Date.now();
+  pressButton(e.target);
+});
+
+// Запасной путь: если браузер не прислал pointerdown, ловим обычный клик.
+dpad.addEventListener('click', e => {
+  if (Date.now() - lastPress < 700) return;
+  pressButton(e.target);
 });
 
 // Свайпы для телефона
@@ -444,14 +554,9 @@ canvas.addEventListener('touchend', e => {
   touchStart = null;
   if (Math.abs(dx) < 24 && Math.abs(dy) < 24) return;
 
-  const turn = Math.abs(dx) > Math.abs(dy)
+  queueTurn(Math.abs(dx) > Math.abs(dy)
     ? { x: Math.sign(dx), y: 0 }
-    : { x: 0, y: Math.sign(dy) };
-
-  if (state !== 'playing') return;
-  const last = pending.length ? pending[pending.length - 1] : dir;
-  if (turn.x === -last.x && turn.y === -last.y) return;
-  if (pending.length < 2) pending.push(turn);
+    : { x: 0, y: Math.sign(dy) });
 }, { passive: true });
 
 reset();
