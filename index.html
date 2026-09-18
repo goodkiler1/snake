@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Змейка</title>
+<style>
+  :root {
+    --bg: #12151c;
+    --panel: #1a1f2b;
+    --border: #2a3242;
+    --text: #e8ecf4;
+    --muted: #8a93a8;
+    --snake: #4ade80;
+    --snake-head: #86efac;
+    --food: #f87171;
+    --grid: #1e2431;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 16px;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+
+  .scores {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    max-width: 420px;
+  }
+
+  .score-box {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 12px;
+    text-align: center;
+  }
+
+  .score-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+  }
+
+  .score-value {
+    font-size: 24px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+  }
+
+  .stage {
+    position: relative;
+    width: 100%;
+    max-width: 420px;
+    aspect-ratio: 1;
+  }
+
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    text-align: center;
+    padding: 24px;
+    background: rgba(18, 21, 28, 0.88);
+    border-radius: 12px;
+  }
+
+  .overlay[hidden] { display: none; }
+
+  .overlay-title {
+    font-size: 26px;
+    font-weight: 700;
+  }
+
+  .overlay-text {
+    font-size: 14px;
+    color: var(--muted);
+    line-height: 1.6;
+    max-width: 280px;
+  }
+
+  button {
+    margin-top: 6px;
+    padding: 11px 26px;
+    font-size: 15px;
+    font-weight: 600;
+    font-family: inherit;
+    color: #0b0e14;
+    background: var(--snake);
+    border: none;
+    border-radius: 9px;
+    cursor: pointer;
+  }
+
+  button:hover { background: var(--snake-head); }
+  button:focus-visible { outline: 2px solid var(--snake-head); outline-offset: 3px; }
+
+  .hint {
+    font-size: 13px;
+    color: var(--muted);
+    text-align: center;
+    line-height: 1.6;
+  }
+
+  kbd {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 2px 6px;
+    font-family: inherit;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Змейка</h1>
+
+<div class="scores">
+  <div class="score-box">
+    <div class="score-label">Счёт</div>
+    <div class="score-value" id="score">0</div>
+  </div>
+  <div class="score-box">
+    <div class="score-label">Рекорд</div>
+    <div class="score-value" id="best">0</div>
+  </div>
+</div>
+
+<div class="stage">
+  <canvas id="board" width="400" height="400"></canvas>
+  <div class="overlay" id="overlay">
+    <div class="overlay-title" id="overlay-title">Змейка</div>
+    <div class="overlay-text" id="overlay-text">
+      Управляй стрелками или свайпом. Собирай красные яблоки и не врезайся в себя.
+    </div>
+    <button id="action">Играть</button>
+  </div>
+</div>
+
+<p class="hint">
+  <kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd> движение &nbsp;·&nbsp; <kbd>Пробел</kbd> пауза
+</p>
+
+<script>
+const CELLS = 20;              // клеток по стороне поля
+const CELL = 20;               // размер клетки в пикселях канваса
+const START_SPEED = 140;       // мс на шаг в начале
+const MIN_SPEED = 70;          // самый быстрый шаг
+const SPEED_STEP = 3;          // на сколько ускоряемся за яблоко
+
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const bestEl = document.getElementById('best');
+const overlay = document.getElementById('overlay');
+const overlayTitle = document.getElementById('overlay-title');
+const overlayText = document.getElementById('overlay-text');
+const actionBtn = document.getElementById('action');
+
+let snake, dir, pending, food, score, speed, state, timer;
+
+// Рекорд храним в браузере. В приватном окне доступа может не быть — не падаем.
+function loadBest() {
+  try { return parseInt(localStorage.getItem('snake-best'), 10) || 0; }
+  catch { return 0; }
+}
+function saveBest(value) {
+  try { localStorage.setItem('snake-best', String(value)); } catch {}
+}
+
+let best = loadBest();
+bestEl.textContent = best;
+
+function reset() {
+  snake = [{ x: 9, y: 10 }, { x: 8, y: 10 }, { x: 7, y: 10 }];
+  dir = { x: 1, y: 0 };
+  pending = [];
+  score = 0;
+  speed = START_SPEED;
+  scoreEl.textContent = '0';
+  placeFood();
+}
+
+function placeFood() {
+  const free = [];
+  for (let y = 0; y < CELLS; y++) {
+    for (let x = 0; x < CELLS; x++) {
+      if (!snake.some(s => s.x === x && s.y === y)) free.push({ x, y });
+    }
+  }
+  food = free.length ? free[Math.floor(Math.random() * free.length)] : null;
+}
+
+function step() {
+  // Берём следующий поворот из очереди — так быстрые нажатия не теряются.
+  while (pending.length) {
+    const next = pending.shift();
+    if (next.x !== -dir.x || next.y !== -dir.y) { dir = next; break; }
+  }
+
+  const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+
+  const hitWall = head.x < 0 || head.y < 0 || head.x >= CELLS || head.y >= CELLS;
+  const hitSelf = snake.some((s, i) => i < snake.length - 1 && s.x === head.x && s.y === head.y);
+  if (hitWall || hitSelf) return gameOver();
+
+  snake.unshift(head);
+
+  if (food && head.x === food.x && head.y === food.y) {
+    score++;
+    scoreEl.textContent = score;
+    if (score > best) {
+      best = score;
+      bestEl.textContent = best;
+      saveBest(best);
+    }
+    speed = Math.max(MIN_SPEED, speed - SPEED_STEP);
+    placeFood();
+    if (!food) return win();
+  } else {
+    snake.pop();
+  }
+
+  draw();
+  timer = setTimeout(step, speed);
+}
+
+function draw() {
+  ctx.fillStyle = getVar('--panel');
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = getVar('--grid');
+  ctx.lineWidth = 1;
+  for (let i = 1; i < CELLS; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * CELL + 0.5, 0);
+    ctx.lineTo(i * CELL + 0.5, canvas.height);
+    ctx.moveTo(0, i * CELL + 0.5);
+    ctx.lineTo(canvas.width, i * CELL + 0.5);
+    ctx.stroke();
+  }
+
+  if (food) {
+    ctx.fillStyle = getVar('--food');
+    ctx.beginPath();
+    ctx.arc(food.x * CELL + CELL / 2, food.y * CELL + CELL / 2, CELL / 2 - 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  snake.forEach((part, i) => {
+    ctx.fillStyle = i === 0 ? getVar('--snake-head') : getVar('--snake');
+    roundRect(part.x * CELL + 1.5, part.y * CELL + 1.5, CELL - 3, CELL - 3, 5);
+    ctx.fill();
+  });
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function getVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function showOverlay(title, text, button) {
+  overlayTitle.textContent = title;
+  overlayText.textContent = text;
+  actionBtn.textContent = button;
+  overlay.hidden = false;
+  actionBtn.focus();
+}
+
+function start() {
+  reset();
+  state = 'playing';
+  overlay.hidden = true;
+  draw();
+  timer = setTimeout(step, speed);
+}
+
+function pause() {
+  if (state !== 'playing') return;
+  state = 'paused';
+  clearTimeout(timer);
+  showOverlay('Пауза', 'Счёт: ' + score, 'Продолжить');
+}
+
+function resume() {
+  if (state !== 'paused') return;
+  state = 'playing';
+  overlay.hidden = true;
+  timer = setTimeout(step, speed);
+}
+
+function gameOver() {
+  state = 'over';
+  clearTimeout(timer);
+  const text = score === best && score > 0
+    ? 'Новый рекорд: ' + score + '!'
+    : 'Счёт: ' + score + '. Рекорд: ' + best;
+  showOverlay('Игра окончена', text, 'Заново');
+}
+
+function win() {
+  state = 'over';
+  clearTimeout(timer);
+  showOverlay('Победа!', 'Ты заполнил всё поле. Счёт: ' + score, 'Ещё раз');
+}
+
+actionBtn.addEventListener('click', () => {
+  if (state === 'paused') resume();
+  else start();
+});
+
+const KEYS = {
+  ArrowLeft:  { x: -1, y: 0 }, a: { x: -1, y: 0 },
+  ArrowRight: { x: 1, y: 0 },  d: { x: 1, y: 0 },
+  ArrowUp:    { x: 0, y: -1 }, w: { x: 0, y: -1 },
+  ArrowDown:  { x: 0, y: 1 },  s: { x: 0, y: 1 }
+};
+
+document.addEventListener('keydown', e => {
+  if (e.key === ' ' || e.code === 'Space') {
+    e.preventDefault();
+    if (state === 'playing') pause();
+    else if (state === 'paused') resume();
+    else start();
+    return;
+  }
+
+  const turn = KEYS[e.key] || KEYS[e.key.toLowerCase()];
+  if (!turn) return;
+  e.preventDefault();
+
+  if (state === 'ready' || state === 'over') { start(); return; }
+  if (state !== 'playing') return;
+
+  const last = pending.length ? pending[pending.length - 1] : dir;
+  if (turn.x === -last.x && turn.y === -last.y) return;  // разворот на 180° запрещён
+  if (turn.x === last.x && turn.y === last.y) return;    // то же направление — не копим
+  if (pending.length < 2) pending.push(turn);
+});
+
+// Свайпы для телефона
+let touchStart = null;
+canvas.addEventListener('touchstart', e => {
+  touchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+}, { passive: true });
+
+canvas.addEventListener('touchend', e => {
+  if (!touchStart) return;
+  const dx = e.changedTouches[0].clientX - touchStart.x;
+  const dy = e.changedTouches[0].clientY - touchStart.y;
+  touchStart = null;
+  if (Math.abs(dx) < 24 && Math.abs(dy) < 24) return;
+
+  const turn = Math.abs(dx) > Math.abs(dy)
+    ? { x: Math.sign(dx), y: 0 }
+    : { x: 0, y: Math.sign(dy) };
+
+  if (state !== 'playing') return;
+  const last = pending.length ? pending[pending.length - 1] : dir;
+  if (turn.x === -last.x && turn.y === -last.y) return;
+  if (pending.length < 2) pending.push(turn);
+}, { passive: true });
+
+reset();
+state = 'ready';
+draw();
+</script>
+
+</body>
+</html>
